@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
-import os
+from streamlit_gsheets import GSheetsConnection
 
-# 1. Configuración de la página
-st.set_page_config(page_title="Encuesta de Helados", layout="centered")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Encuesta Helados", layout="centered")
+st.title("🍦 Encuesta de Preferencia")
 
-# 2. Definir los sabores (La lista limpia)
+# Lista de sabores
 OPCIONES = [
     "Vaso 1 Litro Vainilla",
     "Vaso 1 Litro Vainilla Chips",
@@ -14,55 +15,59 @@ OPCIONES = [
     "Vaso 1 Litro Vainilla Fresa"
 ]
 
-# 3. Función para manejar el archivo de datos (Persistencia)
-ARCHIVO_DATOS = 'resultados_encuesta.csv'
+# --- CONEXIÓN A GOOGLE SHEETS ---
+# Establecemos la conexión usando los secretos que configuraremos luego
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-def cargar_datos():
-    if not os.path.exists(ARCHIVO_DATOS):
-        # Si no existe, creamos un DataFrame vacío con las opciones en 0
-        df = pd.DataFrame({'Sabor': OPCIONES, 'Votos': 0})
-        df.to_csv(ARCHIVO_DATOS, index=False)
-        return df
-    return pd.read_csv(ARCHIVO_DATOS)
+# Función para obtener datos actualizados
+def obtener_datos():
+    try:
+        # Leemos la hoja (si está vacía, creamos la estructura)
+        df = conn.read(worksheet="Hoja 1", usecols=[0, 1], ttl=0)
+        # Si el archivo está vacío o no tiene las columnas correctas, lo inicializamos
+        if df.empty or "Sabor" not in df.columns:
+            df = pd.DataFrame({'Sabor': OPCIONES, 'Votos': 0})
+        return df.dropna()
+    except:
+        # En caso de error (hoja nueva), devolvemos estructura base
+        return pd.DataFrame({'Sabor': OPCIONES, 'Votos': 0})
 
-def guardar_voto(opcion_elegida):
-    df = pd.read_csv(ARCHIVO_DATOS)
-    # Sumar 1 al sabor elegido
-    df.loc[df['Sabor'] == opcion_elegida, 'Votos'] += 1
-    df.to_csv(ARCHIVO_DATOS, index=False)
-    return df
+# --- LÓGICA DE VOTACIÓN ---
+df = obtener_datos()
 
-# --- INTERFAZ DE USUARIO ---
+st.write("Selecciona tu favorito y los resultados se guardarán en la nube:")
 
-st.title("🍦 Encuesta de Preferencia")
-st.write("Selecciona tu presentación favorita de 1 Litro:")
-
-# Formulario de votación
 with st.form("voto_form"):
     eleccion = st.radio("Opciones:", OPCIONES)
-    boton_enviar = st.form_submit_button("Votar")
+    boton_enviar = st.form_submit_button("Votar y Guardar")
 
     if boton_enviar:
-        guardar_voto(eleccion)
-        st.success(f"¡Gracias! Has votado por: **{eleccion}**")
+        # 1. Buscamos la fila del sabor elegido y sumamos 1
+        # Aseguramos que 'Votos' sea numérico para evitar errores
+        df['Votos'] = pd.to_numeric(df['Votos'], errors='coerce').fillna(0)
+        
+        # Incrementamos el voto
+        df.loc[df['Sabor'] == eleccion, 'Votos'] += 1
+        
+        # 2. Escribimos de vuelta en Google Sheets
+        conn.update(worksheet="Hoja 1", data=df)
+        
+        st.success("✅ ¡Voto guardado en Google Sheets correctamente!")
         st.balloons()
+        
+        # Recargamos los datos para mostrar la gráfica actualizada inmediatamente
+        df = obtener_datos()
 
-# --- RESULTADOS EN TIEMPO REAL ---
+# --- RESULTADOS ---
 st.divider()
-st.subheader("📊 Resultados actuales")
+st.subheader("📊 Resultados en Vivo")
 
-# Cargar datos actualizados
-df_resultados = cargar_datos()
-
-# Mostrar métricas y gráfica
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    # Mostrar tabla simple
-    st.dataframe(df_resultados, hide_index=True)
-    total_votos = df_resultados['Votos'].sum()
-    st.metric("Total de Votos", total_votos)
+    st.dataframe(df, hide_index=True)
+    total = df['Votos'].sum()
+    st.metric("Total Votos", int(total))
 
 with col2:
-    # Mostrar gráfico de barras
-    st.bar_chart(df_resultados, x="Sabor", y="Votos", color="#FF4B4B")
+    st.bar_chart(df, x="Sabor", y="Votos", color="#4BFF4B")
